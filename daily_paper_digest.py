@@ -23,7 +23,7 @@ from email.mime.text import MIMEText
 import xml.etree.ElementTree as ET
 
 import requests
-import google.generativeai as genai
+from google import genai
 
 # ─── 設定 ──────────────────────────────────────────────────────────────────
 
@@ -240,9 +240,11 @@ def generate_summary(paper: dict) -> str:
     )
 
     try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content(prompt)
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+        )
         return response.text.strip()
     except Exception as e:
         print(f"  [警告] Gemini API エラー (PMID={paper['pmid']}): {type(e).__name__}: {e}")
