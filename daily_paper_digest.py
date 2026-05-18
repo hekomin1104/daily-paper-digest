@@ -241,13 +241,8 @@ def generate_summary(paper: dict) -> str:
 
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
-        # 利用可能なモデル一覧を出力（デバッグ用・後で削除）
-        print("  [デバッグ] 利用可能なモデル一覧:")
-        for m in client.models.list():
-            if "flash" in m.name.lower():
-                print(f"    {m.name}")
         response = client.models.generate_content(
-            model="gemini-2.5-flash-lite-preview-06-17",
+            model="gemini-2.5-flash-lite",
             contents=prompt,
         )
         return response.text.strip()
