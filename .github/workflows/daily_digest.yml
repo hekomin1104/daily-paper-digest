@@ -1,0 +1,40 @@
+name: Daily Paper Digest
+
+on:
+  schedule:
+    - cron: '0 22 * * *'  # 22:00 UTC = 翌07:00 JST
+  workflow_dispatch:  # 手動実行も可能
+
+permissions:
+  contents: write  # sent_papers.json を commit するために必要
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests google-generativeai
+
+      - name: Run digest script
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+        run: python daily_paper_digest.py
+
+      - name: Commit updated sent_papers.json
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add sent_papers.json
+          git diff --staged --quiet || git commit -m "Update sent papers list [skip ci]"
+          git push
