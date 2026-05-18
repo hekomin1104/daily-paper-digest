@@ -23,7 +23,7 @@ from email.mime.text import MIMEText
 import xml.etree.ElementTree as ET
 
 import requests
-import google.generativeai as genai
+from groq import Groq
 
 # ─── 設定 ──────────────────────────────────────────────────────────────────
 
@@ -53,7 +53,7 @@ SENT_PAPERS_FILE = "sent_papers.json"
 MAX_SENT_PMIDS = 500
 
 # 環境変数から各種設定を読み込む
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GMAIL_USER = os.environ.get("GMAIL_USER", "")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "y.shinjiro1104@gmail.com")
@@ -223,8 +223,8 @@ def generate_summary(paper: dict) -> str:
     Gemini Flash APIを使って論文の日本語要約を生成する。
     失敗した場合は英語Abstractをそのまま返す。
     """
-    if not GEMINI_API_KEY:
-        print("  [警告] GEMINI_API_KEY が未設定のため要約をスキップ")
+    if not GROQ_API_KEY:
+        print("  [警告] GROQ_API_KEY が未設定のため要約をスキップ")
         return paper["abstract"]
 
     prompt = (
@@ -240,12 +240,15 @@ def generate_summary(paper: dict) -> str:
     )
 
     try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel("gemini-2.0-flash")
-        response = model.generate_content(prompt)
-        return response.text.strip()
+        client = Groq(api_key=GROQ_API_KEY)
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1024,
+        )
+        return response.choices[0].message.content.strip()
     except Exception as e:
-        print(f"  [警告] Gemini API エラー (PMID={paper['pmid']}): {type(e).__name__}: {e}")
+        print(f"  [警告] Groq API エラー (PMID={paper['pmid']}): {type(e).__name__}: {e}")
         print(f"  [警告] Abstractをそのまま使用します")
         return paper["abstract"]
 
