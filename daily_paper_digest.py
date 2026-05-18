@@ -44,7 +44,7 @@ SEARCH_QUERY = (
 SEARCH_RETMAX = 30
 
 # 今回のメールで送る最大論文数
-MAX_PAPERS_PER_EMAIL = 5
+MAX_PAPERS_PER_EMAIL = 2
 
 # 送信済みPMIDを保存するファイル
 SENT_PAPERS_FILE = "sent_papers.json"
@@ -241,11 +241,12 @@ def generate_summary(paper: dict) -> str:
 
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash")
         response = model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
-        print(f"  [警告] Gemini API エラー (PMID={paper['pmid']}): {e} → Abstractをそのまま使用")
+        print(f"  [警告] Gemini API エラー (PMID={paper['pmid']}): {type(e).__name__}: {e}")
+        print(f"  [警告] Abstractをそのまま使用します")
         return paper["abstract"]
 
 
