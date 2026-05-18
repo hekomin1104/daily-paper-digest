@@ -23,7 +23,7 @@ from email.mime.text import MIMEText
 import xml.etree.ElementTree as ET
 
 import requests
-from groq import Groq
+import google.generativeai as genai
 
 # ─── 設定 ──────────────────────────────────────────────────────────────────
 
@@ -53,7 +53,7 @@ SENT_PAPERS_FILE = "sent_papers.json"
 MAX_SENT_PMIDS = 500
 
 # 環境変数から各種設定を読み込む
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GMAIL_USER = os.environ.get("GMAIL_USER", "")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
 RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "y.shinjiro1104@gmail.com")
@@ -223,32 +223,29 @@ def generate_summary(paper: dict) -> str:
     Gemini Flash APIを使って論文の日本語要約を生成する。
     失敗した場合は英語Abstractをそのまま返す。
     """
-    if not GROQ_API_KEY:
-        print("  [警告] GROQ_API_KEY が未設定のため要約をスキップ")
+    if not GEMINI_API_KEY:
+        print("  [警告] GEMINI_API_KEY が未設定のため要約をスキップ")
         return paper["abstract"]
 
     prompt = (
-        "You are a child and adolescent psychiatrist summarizing research papers "
-        "in Japanese for clinical practice. Summarize the following paper in Japanese "
-        "with these sections:\n"
-        "【論文タイトル（日本語訳）】\n"
-        "【要点】（箇条書き3〜4点、各点1〜2文）\n"
-        "【臨床への示唆】（1〜2文、実臨床でどう活かせるか）\n"
-        "Keep it concise and clinically relevant.\n\n"
+        "You are a child and adolescent psychiatrist reading research papers. "
+        "Summarize the following paper in Japanese using exactly this format:\n\n"
+        "【タイトル（日本語）】\n"
+        "（論文タイトルの日本語訳を1行で）\n\n"
+        "【わかったこと】\n"
+        "（何を調べて何がわかったか、2〜3文で簡潔に。専門用語は平易な表現に言い換える）\n\n"
+        "Do not add any other sections or commentary.\n\n"
         f"Title: {paper['title']}\n"
         f"Abstract: {paper['abstract']}"
     )
 
     try:
-        client = Groq(api_key=GROQ_API_KEY)
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=1024,
-        )
-        return response.choices[0].message.content.strip()
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content(prompt)
+        return response.text.strip()
     except Exception as e:
-        print(f"  [警告] Groq API エラー (PMID={paper['pmid']}): {type(e).__name__}: {e}")
+        print(f"  [警告] Gemini API エラー (PMID={paper['pmid']}): {type(e).__name__}: {e}")
         print(f"  [警告] Abstractをそのまま使用します")
         return paper["abstract"]
 
