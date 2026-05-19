@@ -31,7 +31,7 @@ from google import genai
 PUBMED_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
 
 # 検索クエリ（児童精神科・発達関連のMeSH用語）
-SEARCH_QUERY = (
+TOPIC_QUERY = (
     "(child psychiatry[MH] OR adolescent psychiatry[MH] "
     "OR autism spectrum disorder[MH] "
     "OR attention deficit disorder with hyperactivity[MH] "
@@ -39,6 +39,36 @@ SEARCH_QUERY = (
     "OR developmental disabilities[MH] "
     "OR child behavior disorders[MH]) AND hasabstract[text]"
 )
+
+# インパクトファクターの高い雑誌リスト（PubMed タイトル略称）
+# 優先度順に記載
+HIGH_IMPACT_JOURNALS = [
+    "JAMA",                              # IF ~120
+    "N Engl J Med",                      # IF ~96
+    "Lancet",                            # IF ~168
+    "Lancet Psychiatry",                 # IF ~64
+    "World Psychiatry",                  # IF ~49
+    "Nat Med",                           # IF ~82
+    "JAMA Psychiatry",                   # IF ~25
+    "Am J Psychiatry",                   # IF ~18
+    "JAMA Pediatr",                      # IF ~15
+    "Br J Psychiatry",                   # IF ~9
+    "J Am Acad Child Adolesc Psychiatry",# IF ~9
+    "Pediatrics",                        # IF ~8
+    "J Child Psychol Psychiatry",        # IF ~8
+    "Psychol Med",                       # IF ~6
+    "Dev Med Child Neurol",              # IF ~5
+    "Child Dev",                         # IF ~4
+    "J Autism Dev Disord",               # IF ~4
+]
+
+# ジャーナルフィルタのPubMedクエリ文字列
+JOURNAL_FILTER = "(" + " OR ".join(f'"{j}"[TA]' for j in HIGH_IMPACT_JOURNALS) + ")"
+
+# ハイインパクトジャーナル絞り込みあり（過去30日）
+SEARCH_QUERY_HI = f"{TOPIC_QUERY} AND {JOURNAL_FILTER}"
+# フォールバック：ジャーナル絞り込みなし（過去14日）
+SEARCH_QUERY_ALL = TOPIC_QUERY
 
 # 1回の検索で取得する最大件数
 SEARCH_RETMAX = 30
@@ -61,16 +91,13 @@ RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "y.shinjiro1104@gmail.com")
 
 # ─── Step 1: PubMed検索 ────────────────────────────────────────────────────
 
-def search_pubmed() -> list[str]:
-    """
-    PubMed esearch APIで過去14日間の論文を検索し、PMIDリストを返す。
-    """
-    print("Step 1: PubMed検索中...")
+def _run_search(query: str, reldate: int) -> list[str]:
+    """PubMed esearch APIを実行してPMIDリストを返す内部関数。"""
     params = {
         "db": "pubmed",
-        "term": SEARCH_QUERY,
+        "term": query,
         "datetype": "pdat",
-        "reldate": 14,
+        "reldate": reldate,
         "retmax": SEARCH_RETMAX,
         "sort": "pub+date",
         "retmode": "json",
@@ -78,13 +105,34 @@ def search_pubmed() -> list[str]:
     try:
         resp = requests.get(PUBMED_BASE + "esearch.fcgi", params=params, timeout=30)
         resp.raise_for_status()
-        data = resp.json()
-        pmids = data.get("esearchresult", {}).get("idlist", [])
-        print(f"  → {len(pmids)}件のPMIDを取得")
-        return pmids
+        return resp.json().get("esearchresult", {}).get("idlist", [])
     except Exception as e:
         print(f"  [エラー] PubMed検索失敗: {e}")
         return []
+
+
+def search_pubmed() -> list[str]:
+    """
+    ① ハイインパクトジャーナル絞り込み（過去30日）で検索。
+    未送信論文が2件未満ならフォールバックして全ジャーナルも対象に加える。
+    """
+    print("Step 1: PubMed検索中（ハイインパクトジャーナル優先）...")
+    pmids = _run_search(SEARCH_QUERY_HI, reldate=30)
+    print(f"  → ハイインパクト絞り込み: {len(pmids)}件")
+
+    # 念のため：結果が少ない場合はフォールバック
+    if len(pmids) < MAX_PAPERS_PER_EMAIL:
+        print("  → 件数不足のためフォールバック（全ジャーナル・過去14日）")
+        fallback = _run_search(SEARCH_QUERY_ALL, reldate=14)
+        # 重複を除きながらハイインパクト分を先頭に保つ
+        seen = set(pmids)
+        for p in fallback:
+            if p not in seen:
+                pmids.append(p)
+                seen.add(p)
+        print(f"  → フォールバック後合計: {len(pmids)}件")
+
+    return pmids
 
 
 # ─── Step 2: 重複除外 ──────────────────────────────────────────────────────
