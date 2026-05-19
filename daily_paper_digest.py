@@ -40,35 +40,42 @@ TOPIC_QUERY = (
     "OR child behavior disorders[MH]) AND hasabstract[text]"
 )
 
-# インパクトファクターの高い雑誌リスト（PubMed タイトル略称）
-# 優先度順に記載
-HIGH_IMPACT_JOURNALS = [
-    "JAMA",                              # IF ~120
-    "N Engl J Med",                      # IF ~96
-    "Lancet",                            # IF ~168
-    "Lancet Psychiatry",                 # IF ~64
-    "World Psychiatry",                  # IF ~49
-    "Nat Med",                           # IF ~82
-    "JAMA Psychiatry",                   # IF ~25
-    "Am J Psychiatry",                   # IF ~18
-    "JAMA Pediatr",                      # IF ~15
-    "Br J Psychiatry",                   # IF ~9
-    "J Am Acad Child Adolesc Psychiatry",# IF ~9
-    "Pediatrics",                        # IF ~8
-    "J Child Psychol Psychiatry",        # IF ~8
-    "Psychol Med",                       # IF ~6
-    "Dev Med Child Neurol",              # IF ~5
-    "Child Dev",                         # IF ~4
-    "J Autism Dev Disord",               # IF ~4
+# ─── ジャーナルリスト（PubMed タイトル略称・IF別）────────────────────────
+# IF5未満は除外
+
+# Tier 1: IF 30以上
+JOURNALS_TIER1 = [
+    "JAMA",              # IF ~120
+    "N Engl J Med",      # IF ~96
+    "Nat Med",           # IF ~82
+    "Lancet",            # IF ~168
+    "Lancet Psychiatry", # IF ~64
+    "World Psychiatry",  # IF ~73
 ]
 
-# ジャーナルフィルタのPubMedクエリ文字列
-JOURNAL_FILTER = "(" + " OR ".join(f'"{j}"[TA]' for j in HIGH_IMPACT_JOURNALS) + ")"
+# Tier 2: IF 10〜30
+JOURNALS_TIER2 = [
+    "JAMA Psychiatry",   # IF ~25
+    "Am J Psychiatry",   # IF ~18
+    "JAMA Pediatr",      # IF ~15
+]
 
-# ハイインパクトジャーナル絞り込みあり（過去30日）
-SEARCH_QUERY_HI = f"{TOPIC_QUERY} AND {JOURNAL_FILTER}"
-# フォールバック：ジャーナル絞り込みなし（過去14日）
-SEARCH_QUERY_ALL = TOPIC_QUERY
+# Tier 3: IF 5〜10
+JOURNALS_TIER3 = [
+    "Br J Psychiatry",                    # IF ~9
+    "J Am Acad Child Adolesc Psychiatry", # IF ~9
+    "Pediatrics",                         # IF ~8
+    "J Child Psychol Psychiatry",         # IF ~8
+    "Eur Child Adolesc Psychiatry",       # IF ~6
+    "Psychol Med",                        # IF ~6
+    "Dev Med Child Neurol",               # IF ~5
+]
+
+# IF5未満は含まない（Child Dev ~4, J Autism Dev Disord ~4 など）
+
+def _build_journal_filter(journals: list[str]) -> str:
+    """ジャーナルリストからPubMedフィルタ文字列を生成する。"""
+    return "(" + " OR ".join(f'"{j}"[TA]' for j in journals) + ")"
 
 # 1回の検索で取得する最大件数
 SEARCH_RETMAX = 30
@@ -113,24 +120,32 @@ def _run_search(query: str, reldate: int) -> list[str]:
 
 def search_pubmed() -> list[str]:
     """
-    ① ハイインパクトジャーナル絞り込み（過去30日）で検索。
-    未送信論文が2件未満ならフォールバックして全ジャーナルも対象に加える。
+    IFの高い雑誌から順に3段階フォールバック検索。
+      Tier1: IF30以上      → 過去30日
+      Tier2: IF10以上に拡大 → 過去30日
+      Tier3: IF5以上に拡大  → 過去30日
+    いずれの段階でも MAX_PAPERS_PER_EMAIL 件以上揃えば次に進まない。
+    IF5未満はいかなる場合も使用しない。
     """
-    print("Step 1: PubMed検索中（ハイインパクトジャーナル優先）...")
-    pmids = _run_search(SEARCH_QUERY_HI, reldate=30)
-    print(f"  → ハイインパクト絞り込み: {len(pmids)}件")
+    print("Step 1: PubMed検索中（IFフィルタ付き3段階）...")
 
-    # 念のため：結果が少ない場合はフォールバック
-    if len(pmids) < MAX_PAPERS_PER_EMAIL:
-        print("  → 件数不足のためフォールバック（全ジャーナル・過去14日）")
-        fallback = _run_search(SEARCH_QUERY_ALL, reldate=14)
-        # 重複を除きながらハイインパクト分を先頭に保つ
-        seen = set(pmids)
-        for p in fallback:
-            if p not in seen:
-                pmids.append(p)
-                seen.add(p)
-        print(f"  → フォールバック後合計: {len(pmids)}件")
+    tiers = [
+        ("Tier1 IF30以上",  JOURNALS_TIER1),
+        ("Tier2 IF10以上",  JOURNALS_TIER1 + JOURNALS_TIER2),
+        ("Tier3 IF5以上",   JOURNALS_TIER1 + JOURNALS_TIER2 + JOURNALS_TIER3),
+    ]
+
+    pmids: list[str] = []
+    for tier_label, journals in tiers:
+        journal_filter = _build_journal_filter(journals)
+        query = f"{TOPIC_QUERY} AND {journal_filter}"
+        pmids = _run_search(query, reldate=30)
+        print(f"  → {tier_label}: {len(pmids)}件")
+        if len(pmids) >= MAX_PAPERS_PER_EMAIL:
+            break
+
+    if not pmids:
+        print("  → 全Tierで0件。IF5未満は使用しないため本日は送信なし。")
 
     return pmids
 
