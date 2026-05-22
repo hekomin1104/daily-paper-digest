@@ -98,17 +98,22 @@ RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "y.shinjiro1104@gmail.com")
 
 # ─── Step 1: PubMed検索 ────────────────────────────────────────────────────
 
-def _run_search(query: str, reldate: int) -> list[str]:
-    """PubMed esearch APIを実行してPMIDリストを返す内部関数。"""
+def _run_search(query: str, reldate: int | None) -> list[str]:
+    """PubMed esearch APIを実行してPMIDリストを返す内部関数。
+    reldate=None の場合は期間制限なし・関連度順（引用数重視の Best Match）で検索する。
+    """
     params = {
         "db": "pubmed",
         "term": query,
-        "datetype": "pdat",
-        "reldate": reldate,
         "retmax": SEARCH_RETMAX,
-        "sort": "pub+date",
         "retmode": "json",
     }
+    if reldate is not None:
+        params["datetype"] = "pdat"
+        params["reldate"] = reldate
+        params["sort"] = "pub+date"
+    else:
+        params["sort"] = "relevance"  # Best Match: PubMedが引用数・重要度を加味したスコアで並び替え
     try:
         resp = requests.get(PUBMED_BASE + "esearch.fcgi", params=params, timeout=30)
         resp.raise_for_status()
@@ -118,36 +123,43 @@ def _run_search(query: str, reldate: int) -> list[str]:
         return []
 
 
-def search_pubmed() -> list[str]:
+def search_pubmed() -> tuple[list[str], bool]:
     """
-    IFの高い雑誌から順に3段階フォールバック検索。
-      Tier1: IF30以上      → 過去30日
-      Tier2: IF10以上に拡大 → 過去30日
-      Tier3: IF5以上に拡大  → 過去30日
+    IFの高い雑誌から順に4段階フォールバック検索。
+      Tier1: IF30以上      → 過去1年
+      Tier2: IF10以上に拡大 → 過去1年
+      Tier3: IF5以上に拡大  → 過去1年
+      Tier4: IF5以上・年代不問 → 関連度順（引用数重視）フォールバック
     いずれの段階でも MAX_PAPERS_PER_EMAIL 件以上揃えば次に進まない。
     IF5未満はいかなる場合も使用しない。
+
+    戻り値: (PMIDリスト, Tier4フォールバック使用フラグ)
     """
-    print("Step 1: PubMed検索中（IFフィルタ付き3段階）...")
+    print("Step 1: PubMed検索中（IFフィルタ付き4段階）...")
 
     tiers = [
-        ("Tier1 IF30以上",  JOURNALS_TIER1),
-        ("Tier2 IF10以上",  JOURNALS_TIER1 + JOURNALS_TIER2),
-        ("Tier3 IF5以上",   JOURNALS_TIER1 + JOURNALS_TIER2 + JOURNALS_TIER3),
+        ("Tier1 IF30以上・1年以内",           JOURNALS_TIER1,                                    365),
+        ("Tier2 IF10以上・1年以内",            JOURNALS_TIER1 + JOURNALS_TIER2,                   365),
+        ("Tier3 IF5以上・1年以内",             JOURNALS_TIER1 + JOURNALS_TIER2 + JOURNALS_TIER3,   365),
+        ("Tier4 IF5以上・年代不問（引用数重視）", JOURNALS_TIER1 + JOURNALS_TIER2 + JOURNALS_TIER3,  None),
     ]
 
     pmids: list[str] = []
-    for tier_label, journals in tiers:
+    used_fallback = False
+    for tier_label, journals, reldate in tiers:
         journal_filter = _build_journal_filter(journals)
         query = f"{TOPIC_QUERY} AND {journal_filter}"
-        pmids = _run_search(query, reldate=30)
+        pmids = _run_search(query, reldate=reldate)
         print(f"  → {tier_label}: {len(pmids)}件")
         if len(pmids) >= MAX_PAPERS_PER_EMAIL:
+            if reldate is None:
+                used_fallback = True
             break
 
     if not pmids:
         print("  → 全Tierで0件。IF5未満は使用しないため本日は送信なし。")
 
-    return pmids
+    return pmids, used_fallback
 
 
 # ─── Step 2: 重複除外 ──────────────────────────────────────────────────────
@@ -317,7 +329,7 @@ def generate_summary(paper: dict) -> str:
 
 # ─── Step 5: HTMLメール作成・送信 ──────────────────────────────────────────
 
-def build_html_email(papers: list[dict], summaries: list[str], today: date) -> str:
+def build_html_email(papers: list[dict], summaries: list[str], today: date, used_fallback: bool = False) -> str:
     """
     論文カードを並べたHTMLメール本文を作成して返す。
     """
@@ -383,7 +395,7 @@ def build_html_email(papers: list[dict], summaries: list[str], today: date) -> s
   <div class="container">
     <div class="header">
       <h1>📚 今日の論文ダイジェスト</h1>
-      <p>{date_str_header} | 児童精神科・発達心理・育児</p>
+      <p>{date_str_header} | 児童精神科・発達心理・育児{"　※引用数重視・年代不問の論文です" if used_fallback else ""}</p>
     </div>
     <div class="body">
       {cards_html}
@@ -475,7 +487,7 @@ def main():
     print(f"=== 論文ダイジェスト実行: {today} ===")
 
     # Step 1: PubMed検索
-    all_pmids = search_pubmed()
+    all_pmids, used_fallback = search_pubmed()
 
     # Step 2: 重複除外
     sent_pmids = load_sent_pmids()
@@ -511,8 +523,9 @@ def main():
             time.sleep(1)
 
     # Step 5: HTMLメール作成・送信
-    html, date_str = build_html_email(papers, summaries, today)
-    subject = f"📚 論文ダイジェスト {date_str} | 児童精神科・発達"
+    html, date_str = build_html_email(papers, summaries, today, used_fallback=used_fallback)
+    fallback_tag = "（引用数重視）" if used_fallback else ""
+    subject = f"📚 論文ダイジェスト {date_str} | 児童精神科・発達{fallback_tag}"
     send_email(html, subject)
 
     # Step 6: 送信済みPMIDを保存
