@@ -81,7 +81,7 @@ def _build_journal_filter(journals: list[str]) -> str:
 SEARCH_RETMAX = 30
 
 # 今回のメールで送る最大論文数
-MAX_PAPERS_PER_EMAIL = 2
+MAX_PAPERS_PER_EMAIL = 3
 
 # 送信済みPMIDを保存するファイル
 SENT_PAPERS_FILE = "sent_papers.json"
