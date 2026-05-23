@@ -138,9 +138,9 @@ def search_pubmed() -> tuple[list[str], bool]:
     print("Step 1: PubMed検索中（IFフィルタ付き4段階）...")
 
     tiers = [
-        ("Tier1 IF30以上・1年以内",           JOURNALS_TIER1,                                    365),
-        ("Tier2 IF10以上・1年以内",            JOURNALS_TIER1 + JOURNALS_TIER2,                   365),
-        ("Tier3 IF5以上・1年以内",             JOURNALS_TIER1 + JOURNALS_TIER2 + JOURNALS_TIER3,   365),
+        ("Tier1 IF30以上・2年以内",           JOURNALS_TIER1,                                    730),
+        ("Tier2 IF10以上・2年以内",            JOURNALS_TIER1 + JOURNALS_TIER2,                   730),
+        ("Tier3 IF5以上・2年以内",             JOURNALS_TIER1 + JOURNALS_TIER2 + JOURNALS_TIER3,   730),
         ("Tier4 IF5以上・年代不問（引用数重視）", JOURNALS_TIER1 + JOURNALS_TIER2 + JOURNALS_TIER3,  None),
     ]
 
