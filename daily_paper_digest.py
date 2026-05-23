@@ -37,7 +37,7 @@ TOPIC_QUERY = (
     "OR attention deficit disorder with hyperactivity[MH] "
     "OR child development[MH] OR parenting[MH] "
     "OR developmental disabilities[MH] "
-    "OR child behavior disorders[MH]) AND hasabstract[text]"
+    "OR child behavior disorders[MH]) AND hasabstract[text] AND free full text[sb]"
 )
 
 # ─── ジャーナルリスト（PubMed タイトル略称・IF別）────────────────────────
@@ -259,6 +259,16 @@ def fetch_paper_details(pmids: list[str]) -> list[dict]:
                 medline_date = article.findtext(".//PubDate/MedlineDate", "")
                 year = medline_date[:4] if medline_date else ""
 
+            # PMC ID・DOI（全文リンク用）
+            pmc_id = ""
+            doi = ""
+            for aid in article.findall(".//ArticleIdList/ArticleId"):
+                id_type = aid.get("IdType", "")
+                if id_type == "pmc" and aid.text:
+                    pmc_id = aid.text.strip().replace("PMC", "")
+                elif id_type == "doi" and aid.text:
+                    doi = aid.text.strip()
+
             papers.append({
                 "pmid": pmid,
                 "title": title,
@@ -266,6 +276,8 @@ def fetch_paper_details(pmids: list[str]) -> list[dict]:
                 "authors": first_author,
                 "journal": journal,
                 "year": year,
+                "pmc_id": pmc_id,
+                "doi": doi,
             })
         except Exception as e:
             print(f"  [警告] 論文パース失敗 (PMID={pmid}): {e}")
@@ -372,6 +384,17 @@ def build_html_email(papers: list[dict], summaries: list[str], today: date, used
 
             pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/{paper['pmid']}/"
 
+            # 全文リンク: PMC → DOI → PubMed の優先順
+            if paper.get("pmc_id"):
+                fulltext_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/PMC{paper['pmc_id']}/"
+                fulltext_label = "📄 全文を読む（PMC）"
+            elif paper.get("doi"):
+                fulltext_url = f"https://doi.org/{paper['doi']}"
+                fulltext_label = "📄 全文を読む（DOI）"
+            else:
+                fulltext_url = pubmed_url
+                fulltext_label = "🔗 PubMed"
+
             cards_html += f"""
             <div class="card">
               <div style="padding: 12px 16px 0 16px;">
@@ -380,7 +403,11 @@ def build_html_email(papers: list[dict], summaries: list[str], today: date, used
               <div class="card-title">{_html_escape(paper['title'])}</div>
               <div class="card-meta">{_html_escape(meta_str)}</div>
               <div class="card-summary">{_html_escape(summary)}</div>
-              <div class="card-link">🔗 PubMed: <a href="{pubmed_url}">{pubmed_url}</a></div>
+              <div class="card-link">
+                <a href="{fulltext_url}" style="font-weight:bold;">{fulltext_label}</a>
+                &nbsp;&nbsp;
+                <a href="{pubmed_url}" style="color:#888; font-size:12px;">（PubMed抄録）</a>
+              </div>
             </div>
             """
 
