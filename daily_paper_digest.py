@@ -78,7 +78,7 @@ def _build_journal_filter(journals: list[str]) -> str:
     return "(" + " OR ".join(f'"{j}"[TA]' for j in journals) + ")"
 
 # 1回の検索で取得する最大件数
-SEARCH_RETMAX = 30
+SEARCH_RETMAX = 200
 
 # 今回のメールで送る最大論文数
 MAX_PAPERS_PER_EMAIL = 3
@@ -123,17 +123,20 @@ def _run_search(query: str, reldate: int | None) -> list[str]:
         return []
 
 
-def search_pubmed() -> tuple[list[str], bool]:
+def search_pubmed(sent_pmids: list[str]) -> tuple[list[str], bool]:
     """
     IFの高い雑誌から順に4段階フォールバック検索。
-      Tier1: IF30以上      → 過去1年
-      Tier2: IF10以上に拡大 → 過去1年
-      Tier3: IF5以上に拡大  → 過去1年
+      Tier1: IF30以上      → 過去2年
+      Tier2: IF10以上に拡大 → 過去2年
+      Tier3: IF5以上に拡大  → 過去2年
       Tier4: IF5以上・年代不問 → 関連度順（引用数重視）フォールバック
-    いずれの段階でも MAX_PAPERS_PER_EMAIL 件以上揃えば次に進まない。
+    いずれの段階でも重複除外後に MAX_PAPERS_PER_EMAIL 件以上揃えば次に進まない。
     IF5未満はいかなる場合も使用しない。
 
-    戻り値: (PMIDリスト, Tier4フォールバック使用フラグ)
+    引数:
+      sent_pmids: 送信済みPMIDリスト（各Tier内で重複除外に使用）
+
+    戻り値: (重複除外済み・MAX_PAPERS_PER_EMAIL件以下のPMIDリスト, Tier4フォールバック使用フラグ)
     """
     print("Step 1: PubMed検索中（IFフィルタ付き4段階）...")
 
@@ -144,22 +147,28 @@ def search_pubmed() -> tuple[list[str], bool]:
         ("Tier4 IF5以上・年代不問（引用数重視）", JOURNALS_TIER1 + JOURNALS_TIER2 + JOURNALS_TIER3,  None),
     ]
 
-    pmids: list[str] = []
+    sent_set = set(sent_pmids)
+    target_pmids: list[str] = []
     used_fallback = False
     for tier_label, journals, reldate in tiers:
         journal_filter = _build_journal_filter(journals)
         query = f"{TOPIC_QUERY} AND {journal_filter}"
-        pmids = _run_search(query, reldate=reldate)
-        print(f"  → {tier_label}: {len(pmids)}件")
-        if len(pmids) >= MAX_PAPERS_PER_EMAIL:
+        raw_pmids = _run_search(query, reldate=reldate)
+        # 重複除外して最大件数に絞る
+        new_pmids = [p for p in raw_pmids if p not in sent_set][:MAX_PAPERS_PER_EMAIL]
+        print(f"  → {tier_label}: 検索{len(raw_pmids)}件 / 重複除外後{len(new_pmids)}件")
+        if len(new_pmids) >= MAX_PAPERS_PER_EMAIL:
+            target_pmids = new_pmids
             if reldate is None:
                 used_fallback = True
             break
+        # 足りなければ次のTierへ（最後のTierの結果をそのまま使う）
+        target_pmids = new_pmids
 
-    if not pmids:
+    if not target_pmids:
         print("  → 全Tierで0件。IF5未満は使用しないため本日は送信なし。")
 
-    return pmids, used_fallback
+    return target_pmids, used_fallback
 
 
 # ─── Step 2: 重複除外 ──────────────────────────────────────────────────────
@@ -513,12 +522,12 @@ def main():
     today = date.today()
     print(f"=== 論文ダイジェスト実行: {today} ===")
 
-    # Step 1: PubMed検索
-    all_pmids, used_fallback = search_pubmed()
-
-    # Step 2: 重複除外
+    # Step 2: 送信済みPMIDを読み込む（重複除外・保存に使用）
     sent_pmids = load_sent_pmids()
-    target_pmids = filter_new_pmids(all_pmids, sent_pmids)
+
+    # Step 1: PubMed検索（各Tier内で重複除外を行い、採用件数を判定）
+    target_pmids, used_fallback = search_pubmed(sent_pmids)
+    print(f"Step 2: 重複除外後 {len(target_pmids)}件（最大{MAX_PAPERS_PER_EMAIL}件送信）")
 
     # 新着論文なしの場合
     if not target_pmids:
