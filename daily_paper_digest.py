@@ -617,9 +617,8 @@ def main():
             time.sleep(1)
 
     # Step 5: HTMLメール作成・送信
-    html, date_str = build_html_email(papers, summaries, today, used_fallback=used_fallback)
-    fallback_tag = "（引用数重視）" if used_fallback else ""
-    subject = f"📚 論文ダイジェスト {date_str} | 児童精神科・発達{fallback_tag}"
+    html, date_str = build_html_email(papers, summaries, today, classic_pmids=classic_pmids)
+    subject = f"📚 論文ダイジェスト {date_str} | 児童精神科・発達"
     send_email(html, subject)
 
     # Step 6: 送信済みPMIDを保存
