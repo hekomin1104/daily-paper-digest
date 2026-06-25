@@ -123,52 +123,92 @@ def _run_search(query: str, reldate: int | None) -> list[str]:
         return []
 
 
-def search_pubmed(sent_pmids: list[str]) -> tuple[list[str], bool]:
-    """
-    IFの高い雑誌から順に4段階フォールバック検索。
-      Tier1: IF30以上      → 過去2年
-      Tier2: IF10以上に拡大 → 過去2年
-      Tier3: IF5以上に拡大  → 過去2年
-      Tier4: IF5以上・年代不問 → 関連度順（引用数重視）フォールバック
-    いずれの段階でも重複除外後に MAX_PAPERS_PER_EMAIL 件以上揃えば次に進まない。
-    IF5未満はいかなる場合も使用しない。
+# 1通あたりの「名作（年代不問・高インパクト）」の本数。残りは新作（最近2年）。
+CLASSIC_PER_EMAIL = 1
 
-    引数:
-      sent_pmids: 送信済みPMIDリスト（各Tier内で重複除外に使用）
 
-    戻り値: (重複除外済み・MAX_PAPERS_PER_EMAIL件以下のPMIDリスト, Tier4フォールバック使用フラグ)
-    """
-    print("Step 1: PubMed検索中（IFフィルタ付き4段階）...")
+def _dedup(raw_pmids: list[str], sent_set: set, exclude: set) -> list[str]:
+    """送信済み・除外済みを取り除いたPMIDリストを順序維持で返す。"""
+    out = []
+    for p in raw_pmids:
+        if p not in sent_set and p not in exclude and p not in out:
+            out.append(p)
+    return out
 
+
+def _pick_recent(sent_set: set, need: int, exclude: set) -> list[str]:
+    """新作枠: IFの高い雑誌から順に、最近2年・新着順で need 件を集める。"""
+    picks: list[str] = []
     tiers = [
-        ("Tier1 IF30以上・2年以内",           JOURNALS_TIER1,                                    730),
-        ("Tier2 IF10以上・2年以内",            JOURNALS_TIER1 + JOURNALS_TIER2,                   730),
-        ("Tier3 IF5以上・2年以内",             JOURNALS_TIER1 + JOURNALS_TIER2 + JOURNALS_TIER3,   730),
-        ("Tier4 IF5以上・年代不問（引用数重視）", JOURNALS_TIER1 + JOURNALS_TIER2 + JOURNALS_TIER3,  None),
+        ("Tier1 IF30以上・2年", JOURNALS_TIER1),
+        ("Tier2 IF10以上・2年", JOURNALS_TIER1 + JOURNALS_TIER2),
+        ("Tier3 IF5以上・2年",  JOURNALS_TIER1 + JOURNALS_TIER2 + JOURNALS_TIER3),
     ]
-
-    sent_set = set(sent_pmids)
-    target_pmids: list[str] = []
-    used_fallback = False
-    for tier_label, journals, reldate in tiers:
-        journal_filter = _build_journal_filter(journals)
-        query = f"{TOPIC_QUERY} AND {journal_filter}"
-        raw_pmids = _run_search(query, reldate=reldate)
-        # 重複除外して最大件数に絞る
-        new_pmids = [p for p in raw_pmids if p not in sent_set][:MAX_PAPERS_PER_EMAIL]
-        print(f"  → {tier_label}: 検索{len(raw_pmids)}件 / 重複除外後{len(new_pmids)}件")
-        if len(new_pmids) >= MAX_PAPERS_PER_EMAIL:
-            target_pmids = new_pmids
-            if reldate is None:
-                used_fallback = True
+    for tier_label, journals in tiers:
+        if len(picks) >= need:
             break
-        # 足りなければ次のTierへ（最後のTierの結果をそのまま使う）
-        target_pmids = new_pmids
+        query = f"{TOPIC_QUERY} AND {_build_journal_filter(journals)}"
+        raw = _run_search(query, reldate=730)
+        new = _dedup(raw, sent_set, exclude | set(picks))
+        print(f"  → 新作 {tier_label}: 検索{len(raw)}件 / 未送信{len(new)}件")
+        for p in new:
+            picks.append(p)
+            if len(picks) >= need:
+                break
+    return picks[:need]
 
-    if not target_pmids:
-        print("  → 全Tierで0件。IF5未満は使用しないため本日は送信なし。")
 
-    return target_pmids, used_fallback
+def _pick_classic(sent_set: set, need: int, exclude: set) -> list[str]:
+    """名作枠: IF5以上の雑誌・年代不問・関連度順(Best Match=高インパクト)で need 件。"""
+    if need <= 0:
+        return []
+    journals = JOURNALS_TIER1 + JOURNALS_TIER2 + JOURNALS_TIER3
+    query = f"{TOPIC_QUERY} AND {_build_journal_filter(journals)}"
+    raw = _run_search(query, reldate=None)  # relevance順・年代不問
+    new = _dedup(raw, sent_set, exclude)
+    print(f"  → 名作 年代不問・関連度順: 検索{len(raw)}件 / 未送信{len(new)}件")
+    return new[:need]
+
+
+def search_pubmed(sent_pmids: list[str]) -> tuple[list[str], set]:
+    """
+    毎回「新作（最近2年）」＋「名作（年代不問・高インパクト）」を混ぜて選ぶ。
+      - 新作: MAX_PAPERS_PER_EMAIL - CLASSIC_PER_EMAIL 件（IFの高い雑誌優先・新着順）
+      - 名作: CLASSIC_PER_EMAIL 件（年代不問・PubMed関連度順=高インパクトの代理指標）
+    どちらかが不足したらもう一方のプールから補充する。
+    IF5未満の雑誌は使用しない。
+
+    戻り値: (選定PMIDリスト, そのうち名作のPMID集合)
+    """
+    print("Step 1: PubMed検索中（新作＋名作ミックス）...")
+    sent_set = set(sent_pmids)
+
+    n_classic = min(CLASSIC_PER_EMAIL, MAX_PAPERS_PER_EMAIL)
+    n_recent = MAX_PAPERS_PER_EMAIL - n_classic
+
+    recent = _pick_recent(sent_set, n_recent, exclude=set())
+    classic = _pick_classic(sent_set, n_classic, exclude=set(recent))
+
+    target = recent + classic
+
+    # 不足分の補充: まず名作プール（豊富）、次に新作プールから
+    if len(target) < MAX_PAPERS_PER_EMAIL:
+        short = MAX_PAPERS_PER_EMAIL - len(target)
+        more_classic = _pick_classic(sent_set, MAX_PAPERS_PER_EMAIL, exclude=set(target))
+        for p in more_classic[:short]:
+            target.append(p)
+            classic.append(p)
+    if len(target) < MAX_PAPERS_PER_EMAIL:
+        short = MAX_PAPERS_PER_EMAIL - len(target)
+        more_recent = _pick_recent(sent_set, MAX_PAPERS_PER_EMAIL, exclude=set(target))
+        target += more_recent[:short]
+
+    classic_set = set(classic)
+    if not target:
+        print("  → 新作・名作とも0件。本日は送信なし。")
+    else:
+        print(f"  → 選定: 計{len(target)}件（うち名作{len(classic_set & set(target))}件）")
+    return target, classic_set
 
 
 # ─── Step 2: 重複除外 ──────────────────────────────────────────────────────
@@ -356,10 +396,13 @@ def generate_summary(paper: dict) -> str:
 
 # ─── Step 5: HTMLメール作成・送信 ──────────────────────────────────────────
 
-def build_html_email(papers: list[dict], summaries: list[str], today: date, used_fallback: bool = False) -> str:
+def build_html_email(papers: list[dict], summaries: list[str], today: date, classic_pmids: set = None) -> str:
     """
     論文カードを並べたHTMLメール本文を作成して返す。
+    classic_pmids に含まれるPMIDは「名作（年代不問・高インパクト）」として
+    バッジを付けて区別する。
     """
+    classic_pmids = classic_pmids or set()
     date_str_header = today.strftime("%Y年%m月%d日")
     date_str_subject = today.strftime("%Y/%m/%d")
 
@@ -373,6 +416,8 @@ def build_html_email(papers: list[dict], summaries: list[str], today: date, used
     .body { padding: 24px 32px; }
     .card { border: 1px solid #e0e0e0; border-radius: 6px; margin-bottom: 24px; overflow: hidden; }
     .card-index { background: #2c5f8a; color: white; display: inline-block; padding: 2px 10px; font-weight: bold; font-size: 13px; }
+    .badge-new { background: #e8f0f7; color: #2c5f8a; display: inline-block; padding: 2px 10px; font-weight: bold; font-size: 12px; border-radius: 10px; margin-left: 6px; }
+    .badge-classic { background: #fbeec2; color: #8a6d1a; display: inline-block; padding: 2px 10px; font-weight: bold; font-size: 12px; border-radius: 10px; margin-left: 6px; }
     .card-title { font-size: 16px; font-weight: bold; padding: 12px 16px 4px 16px; color: #1a1a1a; }
     .card-meta { font-size: 12px; color: #888; padding: 0 16px 12px 16px; }
     .card-summary { background: #f9f9f9; padding: 16px; font-size: 14px; line-height: 1.7; white-space: pre-wrap; }
@@ -410,10 +455,16 @@ def build_html_email(papers: list[dict], summaries: list[str], today: date, used
                 fulltext_url = pubmed_url
                 fulltext_label = "🔗 PubMed"
 
+            # 名作（年代不問・高インパクト）か新作（最近2年）かのバッジ
+            if paper["pmid"] in classic_pmids:
+                badge = '<span class="badge-classic">📚 名作・高インパクト</span>'
+            else:
+                badge = '<span class="badge-new">🆕 新着</span>'
+
             cards_html += f"""
             <div class="card">
               <div style="padding: 12px 16px 0 16px;">
-                <span class="card-index">【{i}】</span>
+                <span class="card-index">【{i}】</span>{badge}
               </div>
               <div class="card-title">{_html_escape(paper['title'])}</div>
               <div class="card-meta">{_html_escape(meta_str)}</div>
@@ -437,7 +488,8 @@ def build_html_email(papers: list[dict], summaries: list[str], today: date, used
   <div class="container">
     <div class="header">
       <h1>📚 今日の論文ダイジェスト</h1>
-      <p>{date_str_header} | 児童精神科・発達心理・育児{"　※引用数重視・年代不問の論文です" if used_fallback else ""}</p>
+      <p>{date_str_header} | 児童精神科・発達心理・育児</p>
+      <p style="font-size:12px; opacity:0.75;">🆕 新着（最近2年） ／ 📚 名作（年代不問の高インパクト論文）</p>
     </div>
     <div class="body">
       {cards_html}
@@ -531,9 +583,9 @@ def main():
     # Step 2: 送信済みPMIDを読み込む（重複除外・保存に使用）
     sent_pmids = load_sent_pmids()
 
-    # Step 1: PubMed検索（各Tier内で重複除外を行い、採用件数を判定）
-    target_pmids, used_fallback = search_pubmed(sent_pmids)
-    print(f"Step 2: 重複除外後 {len(target_pmids)}件（最大{MAX_PAPERS_PER_EMAIL}件送信）")
+    # Step 1: PubMed検索（新作＋名作ミックス、重複除外済み）
+    target_pmids, classic_pmids = search_pubmed(sent_pmids)
+    print(f"Step 2: 選定 {len(target_pmids)}件（最大{MAX_PAPERS_PER_EMAIL}件送信）")
 
     # 新着論文なしの場合
     if not target_pmids:
