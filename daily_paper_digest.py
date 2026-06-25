@@ -229,8 +229,10 @@ def fetch_paper_details(pmids: list[str]) -> list[dict]:
 
     for article in root.findall(".//PubmedArticle"):
         try:
-            # PMID
-            pmid_el = article.find(".//PMID")
+            # PMID（参考文献のPMIDを拾わないよう、この論文自身のものを直接指定）
+            pmid_el = article.find("MedlineCitation/PMID")
+            if pmid_el is None:
+                pmid_el = article.find(".//PMID")
             pmid = pmid_el.text.strip() if pmid_el is not None else "unknown"
 
             # タイトル（テキストのみ、タグ内タグを含む場合も対応）
@@ -269,14 +271,18 @@ def fetch_paper_details(pmids: list[str]) -> list[dict]:
                 year = medline_date[:4] if medline_date else ""
 
             # PMC ID・DOI（全文リンク用）
+            # 注意: ".//ArticleIdList" は参考文献(引用している他論文)のIDも拾ってしまい、
+            # リンクが別論文にズレる。この論文自身の PubmedData/ArticleIdList のみを見る。
             pmc_id = ""
             doi = ""
-            for aid in article.findall(".//ArticleIdList/ArticleId"):
-                id_type = aid.get("IdType", "")
-                if id_type == "pmc" and aid.text:
-                    pmc_id = aid.text.strip().replace("PMC", "")
-                elif id_type == "doi" and aid.text:
-                    doi = aid.text.strip()
+            own_id_list = article.find("PubmedData/ArticleIdList")
+            if own_id_list is not None:
+                for aid in own_id_list.findall("ArticleId"):
+                    id_type = aid.get("IdType", "")
+                    if id_type == "pmc" and aid.text and not pmc_id:
+                        pmc_id = aid.text.strip().replace("PMC", "")
+                    elif id_type == "doi" and aid.text and not doi:
+                        doi = aid.text.strip()
 
             papers.append({
                 "pmid": pmid,
