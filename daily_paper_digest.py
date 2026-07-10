@@ -445,15 +445,16 @@ def build_html_email(papers: list[dict], summaries: list[str], today: date, clas
             pubmed_url = f"https://pubmed.ncbi.nlm.nih.gov/{paper['pmid']}/"
 
             # 全文リンク: PMC → DOI → PubMed の優先順
+            # リンクの表示テキストはURLそのもの（コピー時にURLが取れるようにするため）
             if paper.get("pmc_id"):
                 fulltext_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/PMC{paper['pmc_id']}/"
-                fulltext_label = "📄 全文を読む（PMC）"
+                fulltext_kind = "全文（PMC）"
             elif paper.get("doi"):
                 fulltext_url = f"https://doi.org/{paper['doi']}"
-                fulltext_label = "📄 全文を読む（DOI）"
+                fulltext_kind = "全文（DOI）"
             else:
                 fulltext_url = pubmed_url
-                fulltext_label = "🔗 PubMed"
+                fulltext_kind = "PubMed"
 
             # 名作（年代不問・高インパクト）か新作（最近2年）かのバッジ
             if paper["pmid"] in classic_pmids:
@@ -470,9 +471,11 @@ def build_html_email(papers: list[dict], summaries: list[str], today: date, clas
               <div class="card-meta">{_html_escape(meta_str)}</div>
               <div class="card-summary">{_html_escape(summary)}</div>
               <div class="card-link">
-                <a href="{fulltext_url}" style="font-weight:bold;">{fulltext_label}</a>
-                &nbsp;&nbsp;
-                <a href="{pubmed_url}" style="color:#888; font-size:12px;">（PubMed抄録）</a>
+                📄 {fulltext_kind}<br>
+                <a href="{fulltext_url}">{fulltext_url}</a>
+                <br><br>
+                <span style="color:#888; font-size:12px;">🔗 PubMed抄録</span><br>
+                <a href="{pubmed_url}" style="color:#888; font-size:12px;">{pubmed_url}</a>
               </div>
             </div>
             """
